@@ -99,9 +99,18 @@ struct Light {
     vec3  pos;
     vec3  color;
     float attBase;
+    float radius;
 };
 
-vec3 calcLight(Light lights[LIGHTS_NUM], vec3 pos, vec3 color, vec3 normal) {
+struct TraceLightResult {
+    float dist;
+    vec3  n;
+    vec3  color;
+    bool  hit;
+};
+
+vec3 calcLight(Light lights[LIGHTS_NUM], vec3 pos, vec3 color, vec3 normal)
+{
     vec3 sum = vec3(0.0);
 
     for (int i = 0; i < LIGHTS_NUM; i++) {
@@ -113,6 +122,62 @@ vec3 calcLight(Light lights[LIGHTS_NUM], vec3 pos, vec3 color, vec3 normal) {
     }
 
     return color * sum;
+}
+
+TraceResult traceLight(Light light, vec3 orig, vec3 dir)
+{
+    TraceResult res;
+
+    vec3 pos = orig - light.pos;
+
+    float a = dot(dir, dir);
+    float b = dot(pos, dir);
+    float c = dot(pos, pos) - sqr(light.radius);
+
+    float D = sqr(b) - a * c;
+    if (D < 0.0) {
+        return res;
+    }
+
+    float t1 = -b - sqrt(D);
+    if (t1 < 0.0) {
+        t1 = INF;
+    }
+
+    float t2 = -b + sqrt(D);
+    if (t1 < 0.0) {
+        t1 = INF;
+    }
+
+    float t = min(t1, t2);
+    if (t == INF) {
+        return res;
+    }
+
+    res.n = normalize(pos + t * dir);
+    res.dist = t;
+    res.hit = true;
+    return res;
+}
+
+TraceLightResult traceLights(Light lights[LIGHTS_NUM], vec3 orig, vec3 dir)
+{
+    TraceLightResult res;
+    res.dist = INF;
+
+
+    for (int i = 0; i < LIGHTS_NUM; i++) {
+        Light light = lights[i];
+        TraceResult tLight = traceLight(light, orig, dir);
+        if (tLight.hit && tLight.dist < res.dist) {
+            res.color = light.color;
+            res.n = tLight.n;
+            res.dist = tLight.dist;
+        }
+    }
+
+    res.hit = res.dist >= 0.0 && res.dist < INF;
+    return res;
 }
 
 // Lights ^=====================================================================
@@ -337,7 +402,7 @@ float traceCylinderPlane(Cylinder cyl, vec3 normal, vec3 orig, vec3 dir)
 vec3 calcCylSideNormal(Cylinder cyl, float dist, vec3 orig, vec3 dir)
 {
     vec3 pos = orig + dist * dir;
-    vec3 normal = normalize(vec3(pos.xz, 0.0));
+    vec3 normal = normalize(vec3(pos.x, 0.0, pos.z));
     return normal;
 }
 
@@ -437,9 +502,10 @@ vec3 renderMainFrag(vec2 uv, vec2 fragCoord)
             rand(float(iFrame + 5)),
             rand(float(iFrame + 15)));
 
-    const int DIFFUSE = 0;
-    const int REFLECTION = 1;
-    const int REFRACTION = 2;
+    const int EMISSION = 0;
+    const int DIFFUSE = 1;
+    const int REFLECTION = 2;
+    const int REFRACTION = 3;
 
     const float GLASS_N = 1.5;
     const float AIR_N = 1.0;
@@ -451,11 +517,13 @@ vec3 renderMainFrag(vec2 uv, vec2 fragCoord)
 
     lights[0].pos = vec3(1.8, 1.5, 1.8);
     lights[0].color = vec3(1, 1, 1);
-    lights[0].attBase = 15.0;
+    lights[0].attBase = 20.0;
+    lights[0].radius = 0.3;
 
     lights[1].pos = vec3(-3.5, 0.5, -1.0);
     lights[1].color = vec3(1.1, 0.6, 0.6);
     lights[1].attBase = 10.0;
+    lights[1].radius = 0.2;
     // Light setup ^============================================================
 
     // Figures setup ===========================================================
@@ -492,6 +560,14 @@ vec3 renderMainFrag(vec2 uv, vec2 fragCoord)
         vec3 color = vec3(0);
         vec3 normal = vec3(0);
         float nNext = AIR_N;
+
+        TraceLightResult tLight = traceLights(lights, orig, dir);
+        if (tLight.hit && tLight.dist < t) {
+            t = tLight.dist;
+            color = tLight.color;
+            normal = tLight.n;
+            materialType = EMISSION;
+        }
 
         TraceResult tCube = traceCube(cube, orig, dir);
         if (tCube.hit && tCube.dist < t) {
@@ -544,6 +620,9 @@ vec3 renderMainFrag(vec2 uv, vec2 fragCoord)
                 if (!ref.isReflection) {
                     nPrev = nNext;
                 }
+            } else if (materialType == EMISSION) {
+                res = color * colorMult;
+                break;
             }
         } else {
             res = texture(iChannel1, dir).rgb * colorMult;
